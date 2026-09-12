@@ -252,9 +252,18 @@ final class KaraokeButtonOverlay {
     private static func isNowPlayingScreenCurrentlyVisible(liveVC: UIViewController?) -> Bool {
         // Old hook-populated path first, in case a future Spotify build
         // restores the factory method (or this runs on a build where it
-        // still works).
-        if (nowPlayingScrollViewController?.collectionView().window != nil) ||
-           (npvScrollViewController?.collectionView().window != nil) {
+        // still works). 9.1.78 crash fix: the captured instance is not
+        // guaranteed to expose `collectionView` to the ObjC runtime anymore
+        // (unrecognized selector → SIGABRT on this 0.15s poll timer), so
+        // probe before calling.
+        if let c = nowPlayingScrollViewController,
+           (c as? NSObject)?.responds(to: Selector("collectionView")) == true,
+           c.collectionView().window != nil {
+            return true
+        }
+        if let c = npvScrollViewController,
+           (c as? NSObject)?.responds(to: Selector("collectionView")) == true,
+           c.collectionView().window != nil {
             return true
         }
 

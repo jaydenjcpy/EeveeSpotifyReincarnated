@@ -47,7 +47,13 @@ class MusixmatchLyricsRepository: LyricsRepository {
         let queryString = finalQuery.queryString
         stringUrl += "?\(queryString)"
 
-        let request = URLRequest(url: URL(string: stringUrl)!)
+        // ── START OF AI GENERATED CODE ──
+        guard let requestUrl = URL(string: stringUrl) else {
+            writeDebugLog("[Lyrics][Musixmatch] invalid request URL: \(stringUrl)")
+            throw LyricsError.decodingError
+        }
+        let request = URLRequest(url: requestUrl)
+        // ── END OF AI GENERATED CODE ──
 
         let semaphore = DispatchSemaphore(value: 0)
         var data: Data?

@@ -19,8 +19,17 @@ This tweak makes Spotify think you have a Premium subscription, granting free li
 - **LRCLIB**
 - **Genius**
 
+**Spotify 9.1.68 and above**
+
+- **Custom local file lyrics support**
+- **Show lyric fallback reasons toggle support**
+
 > [!NOTE]
 > All providers work now
+
+## Animated Lockscreen Album Art
+
+Displays animated album art on lockscreen like Apple Music using flag. Only supported on iOS 26+
 
 ## How to build an EeveeSpotify IPA using Github actions
 > [!NOTE]

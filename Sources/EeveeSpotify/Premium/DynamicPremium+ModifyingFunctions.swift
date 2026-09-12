@@ -31,6 +31,14 @@ func modifyRemoteConfiguration(_ configuration: inout UcsResponse) {
     // before replacement discarded every ad/upsell fix along with Spotify's
     // current feature assignments.
     modifyAssignedValues(&configuration.assignedValues)
+
+    // ── START OF AI GENERATED CODE ──
+    let canvasFlags = configuration.assignedValues
+        .filter { $0.propertyID.scope == "ios-feature-lockscreen" }
+        .map { "\($0.propertyID.name)=\($0.boolValue.value)" }
+        .sorted()
+    writeDebugLog("[CANVAS][CONFIG] final lockscreen flags: \(canvasFlags)")
+    // ── END OF AI GENERATED CODE ──
 }
 
 private let propertyReplacements = [
@@ -405,6 +413,11 @@ private func modifyAssignedValues(_ values: inout [AssignedValue]) {
                 $0.propertyID = AssignedIdentifier.with { $0.scope = scope; $0.name = name }
                 $0.boolValue = BoolValue.with { $0.value = newValue }
             })
+            // ── START OF AI GENERATED CODE ──
+            if scope == "ios-feature-lockscreen" {
+                writeDebugLog("[CANVAS][CONFIG] appended \(scope).\(name)=\(newValue)")
+            }
+            // ── END OF AI GENERATED CODE ──
             continue
         }
 
@@ -422,6 +435,13 @@ private func modifyAssignedValues(_ values: inout [AssignedValue]) {
             case .forceBool(let newValue):
                 values[index].boolValue = BoolValue.with { $0.value = newValue }
             }
+
+            // ── START OF AI GENERATED CODE ──
+            if replacement.scope == "ios-feature-lockscreen",
+               let name = replacement.name {
+                writeDebugLog("[CANVAS][CONFIG] updated ios-feature-lockscreen.\(name)")
+            }
+            // ── END OF AI GENERATED CODE ──
         }
     }
 }

@@ -15,7 +15,9 @@ extension Color {
         case 8:
             (a, r, g, b) = (int >> 24, int >> 16 & 0xFF, int >> 8 & 0xFF, int & 0xFF)
         default:
-            (a, r, g, b) = (1, 1, 1, 0)
+            // ── START OF AI GENERATED CODE ──
+            (a, r, g, b) = (255, 128, 128, 128)
+            // ── END OF AI GENERATED CODE ──
         }
 
         self.init(

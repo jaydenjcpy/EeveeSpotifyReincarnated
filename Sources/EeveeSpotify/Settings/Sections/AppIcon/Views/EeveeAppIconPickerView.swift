@@ -3,6 +3,7 @@ import UIKit
 
 private let primaryIconKey = "__primary__"
 private let selectedKeyDefault = "EeveeSelectedAppIconName"
+private let mySignIconKey = "MySign"
 
 private struct AppIconEntry: Identifiable, Hashable {
     let id: String
@@ -75,7 +76,7 @@ struct EeveeAppIconPickerView: View {
                 Text(icon.title)
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundColor(.primary)
-                Text(icon.id == selectedKey ? "iconSelected".localized : "iconTapToApply".localized)
+                Text(icon.id == selectedKey ? "iconSelected".localized : (icon.id == mySignIconKey ? "ETA S0N ETA S0N ETA S0N ETA S0N ETA S0N" : "iconTapToApply".localized))
                     .font(.system(size: 13))
                     .foregroundColor(icon.id == selectedKey
                                      ? EeveeSettingsView.spotifyAccentColor
@@ -114,7 +115,9 @@ struct EeveeAppIconPickerView: View {
                          iconFiles: primaryFiles)
         ]
         let alternates = bundleIcons?["CFBundleAlternateIcons"] as? [String: Any] ?? [:]
-        for key in alternates.keys.sorted(by: { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }) {
+        let sortedKeys = alternates.keys.sorted(by: { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending })
+        let orderedKeys = sortedKeys.filter { $0 != mySignIconKey } + sortedKeys.filter { $0 == mySignIconKey }
+        for key in orderedKeys {
             let info = alternates[key] as? [String: Any]
             let files = info?["CFBundleIconFiles"] as? [String] ?? [key]
             // Use the plist key as the display title but convert underscores,

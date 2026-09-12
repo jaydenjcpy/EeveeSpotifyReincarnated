@@ -126,8 +126,10 @@ musixmatch_restricted_popup = "The tweak is unable to load lyrics from Musixmatc
 // Errors Titles
 
 no_such_song = "No Song Found";
-musixmatch_restricted = "Restricted";
-invalid_musixmatch_token = "Unauthorized";
+// ── START OF AI GENERATED CODE ──
+musixmatch_restricted = "Musixmatch Restricted";
+invalid_musixmatch_token = "Musixmatch Unauthorized";
+// ── END OF AI GENERATED CODE ──
 decoding_error = "Decoding Error";
 no_current_track = "No Track Instance";
 unknown_error = "Unknown Error";
@@ -161,6 +163,7 @@ payment_notice = "EeveeSpotify applies patches to unlock certain Premium feature
 
 debug_title = "Debug";
 export_debug_log = "Export Debug Log";
+export_lyric_debug_log = "Export Lyric Debug Log";
 clear_debug_log = "Clear Debug Log";
 debug_log_cleared = "Debug log cleared.";
 debug_log_cleared_ok = "OK";

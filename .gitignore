@@ -30,8 +30,19 @@ modules/zxPluginsInject/packages/
 
 # logs / editor state
 *.log
+gradient.md
 build_log.txt
 .vscode/
 .website/
 .github/copilot-instructions.md
 scripts/spotify_symbol_diff.py
+
+# gliddd4 slop — local AI/session/workspace junk, never push
+.freebuff/
+.opencode/
+VERIFICATION.md
+ai_last20_messages.txt
+full_raw_chat_last50.txt
+full_session_recovery.txt
+messages_after_workstate3.txt
+session_recovery.txt

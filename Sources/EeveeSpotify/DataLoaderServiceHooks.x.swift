@@ -2,7 +2,23 @@ import Foundation
 import Orion
 
 // Bearer token captured from premium-relevant requests; reused by lyrics fetch etc.
-public var spotifyAccessToken: String?
+// ── START OF AI GENERATED CODE ──
+// Accessed from background delegate queues and the lyrics fetch queue — serialized.
+private let tokenQueue = DispatchQueue(label: "com.eeveespotify.token")
+private var _spotifyAccessToken: String?
+
+public var spotifyAccessToken: String? {
+    get { tokenQueue.sync { _spotifyAccessToken } }
+    set { tokenQueue.sync { _spotifyAccessToken = newValue } }
+}
+
+/// Upper bound for one custom-lyrics fetch: repository network timeouts
+/// (SpicyLyrics 15s, lrclib 10s) plus the fallback chain, matching the original
+/// "18s budget" design comment. The URLSession hooks wait up to this long for
+/// the background fetch before falling back to Spotify's own response; a fetch
+/// that exceeds it is discarded (slow networks lose the custom result).
+let lyricsFetchBudget: TimeInterval = 18
+// ── END OF AI GENERATED CODE ──
 
 // Spotify's primary URLSession delegate (wg-spclient: bootstrap, customize, PAM).
 // Patching lives in SpotifyResponsePatcher so HttpClientURLSessionHook can share it.
@@ -33,6 +49,18 @@ class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
             return
         }
 
+        // ── START OF AI GENERATED CODE ──
+        // If didReceiveResponse already fully delivered custom lyrics (4xx/5xx
+        // path), suppress the redundant didCompleteWithError re-delivery.
+        if SpotifyResponsePatcher.consumeLyricsTask(task.taskIdentifier) {
+            return
+        }
+
+        if url.isScrollsita, shouldOverrideLocalTrackURI {
+            writeDebugLog("[LyricsV91] scrollsita request completed: \(url.absoluteString) status=\(String(describing: (task.response as? HTTPURLResponse)?.statusCode)) err=\(String(describing: error))")
+        }
+        // ── END OF AI GENERATED CODE ──
+
         if CasitaResponseProbe.shouldProbe(url) {
             CasitaResponseProbe.flush(task, url: url)
         }
@@ -54,7 +82,81 @@ class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
             return
         }
 
-        guard let buffer = URLSessionHelper.shared.obtainData(for: task) else {
+        let buffer = URLSessionHelper.shared.obtainData(for: task)
+
+        // ── START OF AI GENERATED CODE ──
+        // Lyrics — deliver custom payload even when the buffered original body is nil
+        // (local tracks may not buffer a body). Async fetch with 18s budget, falls back
+        // to Spotify's own response on failure.
+        //
+        // iOS 27 / Spotify 9.1.60 fix: Spotify's URLSession delegate handler for
+        // didReceiveData now accesses @MainActor-isolated state. When we call orig.*
+        // from the SPTDataLoaderService delegate queue (a background serial queue),
+        // Swift's strict concurrency runtime trips _swift_task_checkIsolatedSwift and
+        // kills the process with EXC_BREAKPOINT / SIGTRAP.
+        //
+        // Fix: dispatch the orig.URLSession calls onto the main queue.
+        if url.isLyrics {
+            writeDebugLog("[LyricsNet] SPTDataLoader lyrics request: \(url.path)")
+            let originalLyrics = buffer.flatMap { try? Lyrics(serializedBytes: $0) }
+
+            let semaphore = DispatchSemaphore(value: 0)
+            var customLyricsData: Data?
+            let fetchTrackKey = extractTrackId(from: url.path) ?? currentTrackIdentityKey()
+
+            DispatchQueue.global(qos: .userInitiated).async {
+                customLyricsData = try? getLyricsDataForCurrentTrack(url.path, originalLyrics: originalLyrics)
+                semaphore.signal()
+            }
+
+            // Wait for the background fetch up to the full fetch budget. The
+            // fetch runs on its own thread, but this delegate queue is blocked
+            // while we wait, so a budget longer than needed would stall other
+            // session callbacks; 18s matches the original "18s budget" design
+            // and the longest repository timeout (Genius may still exceed it —
+            // such fetches lose the custom result and fall back below).
+            _ = semaphore.wait(timeout: .now() + .milliseconds(Int(lyricsFetchBudget * 1000)))
+            // Drop the payload if the user switched tracks while the fetch was
+            // in flight — delivering it would paste the previous track's lyrics
+            // into the now-playing card ("carry-over" race). Local-aware: a nil
+            // current key (9.1.x player absent / URI override not yet rendered)
+            // or matching synthetic identity does NOT count as stale.
+            let trackChanged = isStaleLyricsDelivery(fetchTrackKey: fetchTrackKey, path: url.path)
+                || isLyricsDeliverySuperseded(fetchTrackKey: fetchTrackKey, path: url.path)
+            if trackChanged {
+                writeDebugLog("[Lyrics] stale lyrics delivery dropped (track changed during fetch): \(url.path)")
+            }
+            let lyricsPayload: Data
+            if !trackChanged, let customLyricsData = customLyricsData {
+                lyricsPayload = customLyricsData
+            } else if UserDefaults.lyricsSource.isReplacingLyrics {
+                // Custom source selected but no custom lyrics landed (fetch
+                // timed out, source found nothing, or the delivery went stale).
+                // Deliver an empty payload so Spotify's native Musixmatch
+                // lyrics don't leak through; originalLyrics carries the native
+                // colors. Replacing the bare Data() fallback also guarantees a
+                // valid protobuf instead of raw empty bytes.
+                lyricsPayload = emptyLyricsData(originalLyrics: originalLyrics) ?? buffer ?? Data()
+            } else {
+                // Spotify source — pass the native response through unchanged.
+                lyricsPayload = buffer ?? Data()
+            }
+            DispatchQueue.main.async { [self] in
+                orig.URLSession(session, dataTask: task, didReceiveData: lyricsPayload)
+                orig.URLSession(session, task: task, didCompleteWithError: nil)
+                // Reload the lyric card item for local paths even when the
+                // payload was dropped as stale — otherwise a local->local
+                // switch whose own request fails (500-scrollsita) leaves the
+                // previous track's composition in the diffable data source.
+                if isLocalLyricsRequestPath(url.path) {
+                    reloadNowPlayingCollectionForLocalSwitch()
+                }
+            }
+            return
+        }
+        // ── END OF AI GENERATED CODE ──
+
+        guard let buffer = buffer else {
             // Customize 304 fallback — wg-spclient returned 304, no buffer
             // to patch, but we have a cached body from a prior 200.
             if url.isCustomize, let cached = SpotifyResponsePatcher.cachedCustomizeData {
@@ -73,37 +175,6 @@ class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
         }
 
         do {
-            // Lyrics — async fetch with 18s budget, falls back to Spotify's own response on failure.
-            //
-            // iOS 27 / Spotify 9.1.60 fix: Spotify's URLSession delegate handler for
-            // didReceiveData now accesses @MainActor-isolated state. When we call orig.*
-            // from the SPTDataLoaderService delegate queue (a background serial queue),
-            // Swift's strict concurrency runtime trips _swift_task_checkIsolatedSwift and
-            // kills the process with EXC_BREAKPOINT / SIGTRAP.
-            //
-            // Fix: dispatch the two orig.URLSession calls onto the main queue.
-            // This matches the execution context Spotify's renderer expects and eliminates
-            // the @MainActor isolation violation entirely.
-            if url.isLyrics {
-                let originalLyrics = try? Lyrics(serializedBytes: buffer)
-
-                let semaphore = DispatchSemaphore(value: 0)
-                var customLyricsData: Data?
-
-                DispatchQueue.global(qos: .userInitiated).async {
-                    customLyricsData = try? getLyricsDataForCurrentTrack(url.path, originalLyrics: originalLyrics)
-                    semaphore.signal()
-                }
-
-                _ = semaphore.wait(timeout: .now() + .milliseconds(18000))
-                let lyricsPayload = customLyricsData ?? buffer
-                DispatchQueue.main.async { [self] in
-                    orig.URLSession(session, dataTask: task, didReceiveData: lyricsPayload)
-                    orig.URLSession(session, task: task, didCompleteWithError: nil)
-                }
-                return
-            }
-
             if let result = try SpotifyResponsePatcher.patch(url: url, buffer: buffer) {
                 writeDebugLog("[DL] Patched \(result.tag.rawValue)")
                 orig.URLSession(session, dataTask: task, didReceiveData: result.data)
@@ -125,6 +196,11 @@ class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
         didReceiveResponse response: HTTPURLResponse,
         completionHandler handler: @escaping (URLSession.ResponseDisposition) -> Void
     ) {
+        // ── START OF AI GENERATED CODE ──
+        if let url = task.currentRequest?.url, url.isScrollsita, shouldOverrideLocalTrackURI {
+            writeDebugLog("[LyricsV91] scrollsita response received: \(url.absoluteString) status=\(response.statusCode)")
+        }
+        // ── END OF AI GENERATED CODE ──
         if let url = task.currentRequest?.url, url.isCustomize, response.statusCode == 304,
            let cached = SpotifyResponsePatcher.cachedCustomizeData {
             // 304, but our cache holds the already-patched body; force 200 so the
@@ -155,21 +231,41 @@ class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
         }
 
         DispatchQueue.global(qos: .userInitiated).async { [self] in
+            // ── START OF AI GENERATED CODE ──
+            let fetchTrackKey = extractTrackId(from: url.path) ?? currentTrackIdentityKey()
             let data = try? getLyricsDataForCurrentTrack(url.path)
+            // Drop stale 4xx-path deliveries when the user switched tracks
+            // while the fetch was in flight (same carry-over race as the
+            // didCompleteWithError path). Local-aware, see isStaleLyricsDelivery.
+            let trackChanged = isStaleLyricsDelivery(fetchTrackKey: fetchTrackKey, path: url.path)
+                || isLyricsDeliverySuperseded(fetchTrackKey: fetchTrackKey, path: url.path)
+            if trackChanged {
+                writeDebugLog("[Lyrics] stale 4xx lyrics delivery dropped (track changed during fetch): \(url.path)")
+            }
 
-            guard let lyricsData = data,
+            guard let lyricsData = data, !trackChanged,
                   let ok = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "2.0", headerFields: [:]) else {
-                // Fetch failed — let Spotify handle the original non-200 response.
-                handler(.allow)
-                orig.URLSession(session, dataTask: task, didReceiveResponse: response, completionHandler: { _ in })
+                // Fetch failed or went stale — let Spotify handle the original
+                // non-200 response. Deliver on main to match Spotify's
+                // @MainActor delegate context.
+                DispatchQueue.main.async {
+                    handler(.allow)
+                    orig.URLSession(session, dataTask: task, didReceiveResponse: response, completionHandler: { _ in })
+                }
                 return
             }
 
+            writeDebugLog("[DL] Delivering custom lyrics for local track")
+            SpotifyResponsePatcher.markLyricsTaskHandled(task.taskIdentifier)
             DispatchQueue.main.async { [self] in
                 orig.URLSession(session, dataTask: task, didReceiveResponse: ok, completionHandler: handler)
                 orig.URLSession(session, dataTask: task, didReceiveData: lyricsData)
                 orig.URLSession(session, task: task, didCompleteWithError: nil)
+                if isLocalLyricsRequestPath(url.path) {
+                    reloadNowPlayingCollectionForLocalSwitch()
+                }
             }
+            // ── END OF AI GENERATED CODE ──
         }
     }
 

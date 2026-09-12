@@ -201,7 +201,50 @@ struct EeveeSettingsView: View {
                         Text("export_debug_log".localized)
                     }
                 }
-                
+
+                // ── START OF AI GENERATED CODE ──
+                Button {
+                    let logPath = NSTemporaryDirectory() + "eeveespotify_debug.log"
+                    guard FileManager.default.fileExists(atPath: logPath),
+                          let logData = FileManager.default.contents(atPath: logPath),
+                          logData.count > 0 else {
+                        PopUpHelper.showPopUp(message: "no_debug_log_found".localized, buttonText: "no_debug_log_found_ok".localized)
+                        return
+                    }
+                    guard let fullLog = String(data: logData, encoding: .utf8) else {
+                        PopUpHelper.showPopUp(message: "no_debug_log_found".localized, buttonText: "no_debug_log_found_ok".localized)
+                        return
+                    }
+                    let lyricLines = fullLog
+                        .components(separatedBy: .newlines)
+                        .filter { $0.contains("Lyrics") || $0.contains("[V91]") }
+                    guard !lyricLines.isEmpty else {
+                        PopUpHelper.showPopUp(message: "no_debug_log_found".localized, buttonText: "no_debug_log_found_ok".localized)
+                        return
+                    }
+                    let lyricLogPath = NSTemporaryDirectory() + "eeveespotify_lyric_debug.log"
+                    try? lyricLines.joined(separator: "\n")
+                        .write(toFile: lyricLogPath, atomically: true, encoding: .utf8)
+                    let lyricLogURL = URL(fileURLWithPath: lyricLogPath)
+                    let lyricActivityVC = UIActivityViewController(activityItems: [lyricLogURL], applicationActivities: nil)
+                    if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+                       let rootVC = scene.windows.first?.rootViewController {
+                        var topVC = rootVC
+                        while let presented = topVC.presentedViewController { topVC = presented }
+                        if let popover = lyricActivityVC.popoverPresentationController {
+                            popover.sourceView = topVC.view
+                            popover.sourceRect = CGRect(x: topVC.view.bounds.midX, y: topVC.view.bounds.midY, width: 0, height: 0)
+                        }
+                        topVC.present(lyricActivityVC, animated: true)
+                    }
+                } label: {
+                    HStack {
+                        Image(systemName: "music.note.list")
+                        Text("export_lyric_debug_log".localized)
+                    }
+                }
+                // ── END OF AI GENERATED CODE ──
+
                 Button {
                     let logPath = NSTemporaryDirectory() + "eeveespotify_debug.log"
                     try? "".write(toFile: logPath, atomically: true, encoding: .utf8)

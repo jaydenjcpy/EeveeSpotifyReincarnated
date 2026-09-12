@@ -4,26 +4,57 @@ import UIKit
 import Foundation
 import ObjectiveC.runtime
 
-func writeDebugLog(_ message: String) {
-    // Log to system console
-    NSLog("[EeveeSpotify] %@", message)
+// ── START OF AI GENERATED CODE ──
+private let writeDebugLogQueue = DispatchQueue(label: "com.eeveespotify.debuglog")
+private let writeDebugLogLock = NSLock()
+private var writeDebugLogLastMessage: String?
+private var writeDebugLogRepeatCount = 0
 
+func writeDebugLog(_ message: String) {
+    // Collapse consecutive duplicate lines into a single entry plus a repeat
+    // counter so a hot-path log (e.g. a per-query provider check) cannot grow
+    // the file unboundedly (the 1KB -> 1.6MB symptom).
+    var summaryLine: String?
+    writeDebugLogLock.lock()
+    if message == writeDebugLogLastMessage {
+        writeDebugLogRepeatCount += 1
+        writeDebugLogLock.unlock()
+        return
+    }
+    if writeDebugLogRepeatCount > 1 {
+        summaryLine = "[\(Date().description)] ... previous line repeated \(writeDebugLogRepeatCount) times"
+    }
+    writeDebugLogLastMessage = message
+    writeDebugLogRepeatCount = 1
+    writeDebugLogLock.unlock()
+
+    if let summaryLine {
+        NSLog("[EeveeSpotify] %@", summaryLine)
+        appendLogLine(summaryLine)
+    }
+    NSLog("[EeveeSpotify] %@", message)
+    appendLogLine(message)
+}
+
+private func appendLogLine(_ message: String) {
     let logPath = NSTemporaryDirectory() + "eeveespotify_debug.log"
-    let timestamp = Date().description
-    let logMessage = "[\(timestamp)] \(message)\n"
-    
-    if FileManager.default.fileExists(atPath: logPath) {
-        if let fileHandle = FileHandle(forWritingAtPath: logPath) {
-            fileHandle.seekToEndOfFile()
-            if let data = logMessage.data(using: .utf8) {
-                fileHandle.write(data)
+    let logMessage = "[\(Date().description)] \(message)\n"
+
+    writeDebugLogQueue.async {
+        if FileManager.default.fileExists(atPath: logPath) {
+            if let fileHandle = FileHandle(forWritingAtPath: logPath) {
+                fileHandle.seekToEndOfFile()
+                if let data = logMessage.data(using: .utf8) {
+                    fileHandle.write(data)
+                }
+                fileHandle.closeFile()
             }
-            fileHandle.closeFile()
+        } else {
+            try? logMessage.write(toFile: logPath, atomically: true, encoding: .utf8)
         }
-    } else {
-        try? logMessage.write(toFile: logPath, atomically: true, encoding: .utf8)
     }
 }
+// ── END OF AI GENERATED CODE ──
 
 // Timestamp of tweak initialization — persists across Orion reinits within the same process
 // using an environment variable. This prevents the 30s auth window from resetting
@@ -218,8 +249,8 @@ func eeveeEnvFlag(_ name: String) -> Bool {
 }
 
 struct EeveeSpotify: Tweak {
-    static let version = "6.6.8"
-    static let buildNumber = "2"
+    static let version = "7.0.0"
+    static let buildNumber = "1"
     static let repoSlug = GeneratedConfig.repoSlug
     
     static var hookTarget: VersionHookTarget {
@@ -380,6 +411,37 @@ struct EeveeSpotify: Tweak {
 
             let lyricsEnabled = UserDefaults.lyricsSource.isReplacingLyrics
 
+            // ── START OF AI GENERATED CODE ──
+            // Activate statefulPlayer provider — required by the lyrics
+            // feature for track metadata extraction and color resolution.
+            // NonIOS14PremiumPatchingGroup owns
+            // NowPlayingPlatformSwiftServiceImplementationHook which sets
+            // the global `statefulPlayer` variable. Without it, the lyrics
+            // capture in NPVScrollViewControllerV91Hook is dead code and
+            // the path falls back to MPNowPlayingInfoCenter (fragile).
+            // Guard on both the provider class AND the ServerSidedReminder
+            // hook target to avoid Orion crashes from missing classes.
+            let providerOK: Bool = {
+                if let cls = NSClassFromString("NowPlaying_PlatformImpl.NowPlayingPlatformSwiftServiceImplementation"),
+                   class_getInstanceMethod(cls, Selector(("provideStatefulPlayerWithFeatureIdentifier:"))) != nil {
+                    return true
+                }
+                return false
+            }()
+            let reminderOK: Bool = {
+                // ListRowInteractionListenerViewHook targets this Swift-mangled class;
+                // skip the group if it doesn't exist on this build.
+                return NSClassFromString("_TtC15Settings_ECMKit30ListRowInteractionListenerView") != nil
+            }()
+            if providerOK && reminderOK {
+                NonIOS14PremiumPatchingGroup().activate()
+                writeDebugLog("[INIT] Activated NonIOS14PremiumPatchingGroup (statefulPlayer) reminderOK=\(reminderOK)")
+            } else if !providerOK {
+                writeDebugLog("[INIT] Skipped NonIOS14PremiumPatchingGroup (provider class missing)")
+            } else {
+                writeDebugLog("[INIT] Skipped NonIOS14PremiumPatchingGroup (ListRowInteractionListenerView missing)")
+            }
+
             // Lyrics hooks (guarded)
             if lyricsEnabled {
                 let fullscreenOK: Bool = {
@@ -391,7 +453,7 @@ struct EeveeSpotify: Tweak {
                 }()
 
                 let npvOK: Bool = {
-                    if let cls = NSClassFromString("NowPlaying_ScrollImpl.NPVScrollViewController") {
+                    if let cls = NSClassFromString("NowPlaying_ScrollImpl.NPVScrollV2ViewController") {
                         return class_getInstanceMethod(cls, #selector(UIViewController.viewWillAppear(_:))) != nil
                             && class_getInstanceMethod(cls, #selector(UIViewController.viewWillDisappear(_:))) != nil
                     }
@@ -406,9 +468,101 @@ struct EeveeSpotify: Tweak {
 
                 if npvOK {
                     V91LyricsGroup().activate()
+                    writeDebugLog("[INIT] Activated V91LyricsGroup (NPVScrollV2ViewController)")
                 } else {
-                    writeDebugLog("[INIT] Skipped V91LyricsGroup (NPVScrollViewController missing)")
+                    writeDebugLog("[INIT] Skipped V91LyricsGroup (NPVScrollV2ViewController missing on 9.1.68)")
                 }
+
+                // URI rewrite hook is independent of NPVScrollV2ViewController.
+                // Without it, local tracks get a malformed scrollsita URL and the
+                // lyrics card never gets a slot. SPTPlayerTrack exists on 9.1.68.
+                // Also activates NPVScrollViewControllerURIHook (V1) to toggle
+                // shouldOverrideLocalTrackURI only while the now-playing scroll is
+                // on-screen — preventing the synthetic URI from reaching
+                // UAUserActivity.setWebpageURL which rejects non-web URLs.
+                let scrollV1OK: Bool = {
+                    if let cls = NSClassFromString("NowPlaying_ScrollImpl.NPVScrollViewController") {
+                        return class_getInstanceMethod(cls, #selector(UIViewController.viewWillAppear(_:))) != nil
+                    }
+                    return false
+                }()
+                if !npvOK,
+                   scrollV1OK,
+                   let uriCls = NSClassFromString("SPTPlayerTrack"),
+                   uriCls.instancesRespond(to: Selector(("URI"))) {
+                    V91LyricsURIGroup().activate()
+                    writeDebugLog("[INIT] Activated V91LyricsURIGroup (URI rewrite via NPVScrollViewController)")
+
+                    // Defense-in-depth for the UAUserActivity crash: the
+                    // NPVScrollViewController onHide -> shouldOverrideLocalTrackURI=false
+                    // toggle races the NSUserActivity build on the main queue, so a
+                    // synthetic spotify:track: URI can still reach
+                    // -[UAUserActivity setWebpageURL:] and trip the internal
+                    // checkWebpageURL: throw.  Hook the setter to swallow non-web
+                    // schemes (see UAUserActivityCrashFix.x.swift).  Activated only
+                    // when the URI rewrite is live so non-rebuild paths are untouched.
+                    activateUAUserActivityCrashFix()
+                }
+
+                // LyricsScrollProvider only exists pre-9.1.x (Lyrics_CoreImpl
+                // module). On 9.1.x it's gone, so guard the hook group to avoid
+                // a dyld fatalError from Orion trying to swizzle a missing class.
+                if NSClassFromString("Lyrics_CoreImpl.LyricsScrollProvider") != nil {
+                    V91LyricsScrollProviderGroup().activate()
+                    writeDebugLog("[INIT] Activated V91LyricsScrollProviderGroup")
+                } else {
+                    writeDebugLog("[INIT] Skipped V91LyricsScrollProviderGroup (Lyrics_CoreImpl.LyricsScrollProvider missing on 9.1.x)")
+                }
+
+                // 9.1.x lyrics-availability GATE: inject `has_lyrics: true` into
+                // SPTPlayerTrack.metadata() (owned solely by V91LyricsMetadataGroup;
+                // SPTPlayerTrackHook is a pass-through on 9.1.x). Guard on the
+                // selector actually existing to avoid surprising the runtime.
+                if let metaCls = NSClassFromString("SPTPlayerTrack"),
+                   metaCls.instancesRespond(to: Selector(("metadata"))) {
+                    V91LyricsMetadataGroup().activate()
+                    writeDebugLog("[INIT] Activated V91LyricsMetadataGroup (metadata gate)")
+                } else {
+                    writeDebugLog("[INIT] Skipped V91LyricsMetadataGroup (SPTPlayerTrack/metadata missing)")
+                }
+
+                // 9.1.x lyrics-UI GATE: force SPTURL.spt_isLocalFile() to false
+                // for genuine spotify:local: URIs so LyricsUIServiceImplementation
+                // registers the lyrics card provider for local files (it otherwise
+                // drops registration before our URI rewrite / has_lyrics injection
+                // can take effect). Guarded on the selector existing on NSURL.
+                if NSURL.instancesRespond(to: Selector(("spt_isLocalFile"))) {
+                    V91LyricsLocalFileGateGroup().activate()
+                    writeDebugLog("[INIT] Activated V91LyricsLocalFileGateGroup (isLocalFile gate)")
+                } else {
+                    writeDebugLog("[INIT] Skipped V91LyricsLocalFileGateGroup (spt_isLocalFile missing on NSURL)")
+                }
+
+                // Surgical inline NOP of the lyrics-card gate on 9.1.68.
+                // VLC: LyricsUIServiceImplementation.registerScrollProviderIn:
+                // → 0x1034f57c8 calls the provider's Swift availability witness
+                // method; if it returns false, `tbz w20, #0x0` at 0x1034f584c
+                // skips the actual registerProvider: call and the lyrics card
+                // is silently dropped for local files. NOP that one instruction
+                // so the card is always registered.
+                if EeveeSpotify.hookTarget == .v91 {
+                    patchLyricsCardGate()
+                }
+
+                // 9.1.x Show Fallback Reasons port: append a dimmed
+                // "Fallback: <reason>" line to the fullscreen lyrics header
+                // (Lyrics_FullscreenElementPageImpl.FullscreenElementViewController)
+                // and the now-playing album/playlist header
+                // (NowPlaying_ModesImpl.HeaderElementsUnit). Each group is
+                // guarded on its class existing so Orion never swizzles a
+                // missing target.
+                if NSClassFromString("NowPlaying_ModesImpl.HeaderElementsUnit") != nil {
+                    V91HeaderElementsFallbackReasonsGroup().activate()
+                    writeDebugLog("[INIT] Activated V91HeaderElementsFallbackReasonsGroup (now-playing header)")
+                } else {
+                    writeDebugLog("[INIT] Skipped V91HeaderElementsFallbackReasonsGroup (HeaderElementsUnit missing)")
+                }
+                // ── END OF AI GENERATED CODE ──
 
             }
 
@@ -445,6 +599,9 @@ struct EeveeSpotify: Tweak {
             NSLog("[EeveeSpotify] Initialization complete for 9.1.x")
             TrueShuffleHook.install()
             activateEeveeProbes()
+            // ── START OF AI GENERATED CODE ──
+            activateCanvasArtworkPublisher()
+            // ── END OF AI GENERATED CODE ──
             activateSponsorBlock()
             activateKaraokeHooks()
             return

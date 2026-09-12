@@ -9,6 +9,11 @@
                 "roles": ["Maintainer", "Developer"]
             },
             {
+                "usernames": ["gliddd4"],
+                "displayName": "gliddd4",
+                "roles": ["AI Slop Curator", "Lyric support for local files"]
+            },
+            {
                 "usernames": ["faroukbmiled"],
                 "displayName": "faroukbmiled",
                 "roles": ["Maintainer", "Developer"]

@@ -27,6 +27,22 @@ enum SpotifyResponsePatcher {
         return _handledCustomizeTasks.remove(id) != nil
     }
 
+    // ── START OF AI GENERATED CODE ──
+    private static var _handledLyricsTasks = Set<Int>()
+
+    static func markLyricsTaskHandled(_ id: Int) {
+        lock.lock(); defer { lock.unlock() }
+        _handledLyricsTasks.insert(id)
+    }
+
+    // Returns true exactly once per id — prevents didCompleteWithError from
+    // re-delivering lyrics that didReceiveResponse already fully delivered.
+    static func consumeLyricsTask(_ id: Int) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return _handledLyricsTasks.remove(id) != nil
+    }
+    // ── END OF AI GENERATED CODE ──
+
     static func shouldBlock(_ url: URL) -> Bool {
         let elapsed = Date().timeIntervalSince(tweakInitTime)
         let path = url.path.lowercased()
@@ -58,6 +74,12 @@ enum SpotifyResponsePatcher {
         let shouldPatchPremium = BasePremiumPatchingGroup.isActive || PremiumBootstrapGroup.isActive
         let shouldReplaceLyrics = BaseLyricsGroup.isActive
         let isDAC = url.path.lowercased().contains("/dac/view/v1/")
+
+        // ── START OF AI GENERATED CODE ──
+        if url.isLyrics {
+            writeDebugLog("[Patcher] shouldModify lyrics: shouldReplaceLyrics=\(shouldReplaceLyrics) path=\(url.path)")
+        }
+        // ── END OF AI GENERATED CODE ──
 
         return (shouldReplaceLyrics && url.isLyrics)
             || (shouldPatchPremium && (

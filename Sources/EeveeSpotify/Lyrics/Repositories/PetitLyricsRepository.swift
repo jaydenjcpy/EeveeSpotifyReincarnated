@@ -19,7 +19,13 @@ class PetitLyricsRepository: LyricsRepository {
         finalData["clientAppId"] = "p1110417"
         finalData["terminalType"] = 10
         
-        var request = URLRequest(url: URL(string: url)!)
+        // ── START OF AI GENERATED CODE ──
+        guard let requestUrl = URL(string: url) else {
+            writeDebugLog("[Lyrics][Petit] invalid request URL: \(url)")
+            throw LyricsError.decodingError
+        }
+        var request = URLRequest(url: requestUrl)
+        // ── END OF AI GENERATED CODE ──
         
         request.httpMethod = "POST"
         request.httpBody = finalData.queryString.data(using: .utf8)

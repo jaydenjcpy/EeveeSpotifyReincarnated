@@ -2,8 +2,25 @@ import Foundation
 
 extension URL {
     var isLyrics: Bool {
-        self.path.contains("color-lyrics/v2")
+        // ── START OF AI GENERATED CODE ──
+        self.path.lowercased().contains("color-lyrics")
+        // ── END OF AI GENERATED CODE ──
     }
+
+    // ── START OF AI GENERATED CODE ──
+    // The Now-Playing scroll structure request. On 9.1.60 the NPV is
+    // section-based and renders its cards from the protobuf response of a
+    // `scrollsita/v1/scroll/{uri}` network request. The exact path component
+    // is composed at runtime (not a static string in the binary), so we match
+    // the stable `scrollsita` segment in either the path or the full URL string
+    // (the latter covers scheme-relative `hm://`/`sp://` resolved URLs whose
+    // host isn't in `path`).
+    var isScrollsita: Bool {
+        let path = self.path.lowercased()
+        let abs = self.absoluteString.lowercased()
+        return path.contains("/scrollsita/") || (path.isEmpty && abs.contains("scrollsita"))
+    }
+    // ── END OF AI GENERATED CODE ──
     
     var isPlanOverview: Bool {
         self.path.contains("GetPlanOverview")

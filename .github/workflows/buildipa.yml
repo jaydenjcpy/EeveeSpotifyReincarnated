@@ -116,6 +116,72 @@ jobs:
             exit 1
           fi
 
+      - name: Patch Spotify binary (lyrics card gate NOP)
+        if: ${{ inputs.ipa_url != '' }}
+        run: |
+          # Unzip only the Spotify binary, patch 4 bytes at file offset
+          # 0x34f584c (tbz w20, #0x0 → NOP), then update it back into the IPA.
+          # This forces registerScrollProviderIn: to always register the
+          # lyrics card provider, even for local files.
+          export COPYFILE_DISABLE=1
+          rm -rf patch_tmp && mkdir patch_tmp
+          unzip -o spotify.ipa "Payload/Spotify.app/Spotify" -d patch_tmp
+
+          BIN="patch_tmp/Payload/Spotify.app/Spotify"
+          unzip -o spotify.ipa "Payload/Spotify.app/Info.plist" -d patch_tmp >/dev/null
+          plutil -extract CFBundleShortVersionString raw -o patch_tmp/ver.txt patch_tmp/Payload/Spotify.app/Info.plist 2>/dev/null || echo unknown > patch_tmp/ver.txt
+          SPOT_VERSION=$(tr -d "\n" < patch_tmp/ver.txt)
+          echo "Spotify build: $SPOT_VERSION"
+
+          # The gate moves between Spotify builds; known file offsets:
+          #   9.1.68 -> 0x34f584c   9.1.78 -> 0x316c30c
+          case "$SPOT_VERSION" in
+            9.1.68) OFFSET=$((0x34f584c)) ;;
+            9.1.78) OFFSET=$((0x316c30c)) ;;
+            *)
+              echo "::warning::No known lyrics-gate offset for Spotify $SPOT_VERSION - skipping binary patch; runtime patch in tweak will attempt known offsets safely."
+              echo "SKIP_BINARY_PATCH=1" >> $GITHUB_ENV
+              rm -rf patch_tmp
+              exit 0
+              ;;
+          esac
+
+          # Verify the existing 4 bytes are the expected tbz instruction
+          # before writing the NOP; the runtime patch double-checks on device.
+          EXISTING=$(xxd -s $OFFSET -l 4 -p "$BIN")
+          echo "Bytes at offset 0x$(printf %x $OFFSET): $EXISTING"
+          if [ "$EXISTING" == "1f2003d5" ]; then
+            echo "Already NOP-patched - nothing to do"
+            echo "SKIP_BINARY_PATCH=1" >> $GITHUB_ENV
+            rm -rf patch_tmp
+            exit 0
+          fi
+          if [ "$EXISTING" != "f4040036" ]; then
+            echo "::warning::Expected tbz (f4040036) at offset not found (got $EXISTING). Binary layout differs - skipping build-time patch; runtime patch in tweak will verify before NOP-ing."
+            echo "SKIP_BINARY_PATCH=1" >> $GITHUB_ENV
+            rm -rf patch_tmp
+            exit 0
+          fi
+
+          # Write NOP (0xD503201F, little-endian: 1f2003d5)
+          printf '\x1f\x20\x03\xd5' | dd of="$BIN" bs=1 seek=$OFFSET conv=notrunc 2>/dev/null
+
+          # Verify the patch was written.
+          PATCHED=$(xxd -s $OFFSET -l 4 -p "$BIN")
+          echo "Patched bytes: $PATCHED"
+          if [ "$PATCHED" != "1f2003d5" ]; then
+            echo "::error::Patch verification failed: $PATCHED (expected 1f2003d5)"
+            exit 1
+          fi
+
+          echo "Lyrics card gate patched successfully (tbz → NOP)"
+
+          # Delete the old binary from the IPA and re-add the patched one.
+          # Using zip -u alone can silently skip if mtimes match (hot runner).
+          zip -d ../spotify.ipa "Payload/Spotify.app/Spotify" 2>/dev/null || true
+          cd patch_tmp && zip -X ../spotify.ipa "Payload/Spotify.app/Spotify" && cd ..
+          rm -rf patch_tmp
+
       - name: Build zxPluginsInject.dylib
         if: ${{ inputs.ipa_url != '' && inputs.patch_ipa == true }}
         run: |
@@ -210,6 +276,31 @@ jobs:
         run: |
           chmod +x Tools/alt-icons.sh
           Tools/alt-icons.sh "$OUT_IPA"
+
+      - name: Verify binary patch in final IPA
+        if: ${{ inputs.ipa_url != '' && env.SKIP_BINARY_PATCH != '1' }}
+        run: |
+          rm -rf verify_tmp && mkdir verify_tmp
+          unzip -o "$OUT_IPA" "Payload/Spotify.app/Info.plist" -d verify_tmp >/dev/null
+          plutil -extract CFBundleShortVersionString raw -o verify_tmp/ver.txt verify_tmp/Payload/Spotify.app/Info.plist 2>/dev/null || echo unknown > verify_tmp/ver.txt
+          SPOT_VERSION=$(tr -d "\n" < verify_tmp/ver.txt)
+          rm -rf verify_tmp
+          case "$SPOT_VERSION" in
+            9.1.68) VOFFSET=$((0x34f584c)) ;;
+            9.1.78) VOFFSET=$((0x316c30c)) ;;
+            *)      VOFFSET="" ;;
+          esac
+          if [ -z "$VOFFSET" ]; then
+            echo "::warning::No known gate offset for $SPOT_VERSION - skipping final verification."
+            exit 0
+          fi
+          FINAL_BYTES=$(unzip -p "$OUT_IPA" "Payload/Spotify.app/Spotify" | xxd -s $VOFFSET -l 4 -p 2>/dev/null || echo "FAIL")
+          echo "Final IPA bytes: $FINAL_BYTES"
+          if [ "$FINAL_BYTES" != "1f2003d5" ]; then
+            echo "::error::Binary patch LOST in final IPA (expected 1f2003d5, got $FINAL_BYTES). cyan may have discarded the patch."
+            exit 1
+          fi
+          echo "Binary patch verified in final signed IPA"
 
       - name: Upload IPA artifact
         if: ${{ inputs.ipa_url != '' && (inputs.upload_method == 'artifacts' || inputs.upload_method == 'both') }}
